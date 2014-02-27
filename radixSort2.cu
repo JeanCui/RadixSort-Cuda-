@@ -322,7 +322,7 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
   printf("radixSort (MyTest), Throughput = %.4f KElements/s, Time = %.5f s, Size = %u elements\n",
            1.0e-3f * numElements / my_time, my_time, numElements);
 
-//#define testreorder
+#define testreorder
 
 #ifdef testblockcount
   int *hostBlockCount;

@@ -14,11 +14,11 @@
 
 //#define RADIX 4294967296
 #define RADIX 2147483658
-//#define numElements 1048576
-#define numElements 1024
+#define numElements 1048576
+//#define numElements 4096
 #define numIterations 10
 
-#define BLOCKSIZE 64
+#define BLOCKSIZE 1024
 #define BINNUM 16
 void 
 sequentialSort(int *unsorted, int *sorted)
@@ -59,6 +59,7 @@ __device__ int getBit(unsigned int &num, int pos)
 // for 16 bins
 __device__ int getBinIndex(unsigned int &num, int pos)
 { 
+ // printf("num:%d pos:%d\n",num,pos);
   return (num >> (pos)) & (0xf);
 }
 
@@ -80,7 +81,7 @@ __global__ void global_radixsort(unsigned int *d_keys,
   __syncthreads();
   
   int binIdx = getBinIndex(d_keys[idx], pos);
-
+ // printf("key:%d,binIdx:%d\n",d_keys[idx],binIdx);
   perBlockCount[binIdx][tx] = 1;
   //printf("%d,%d\n",perBlockCount[zoo*BLOCKSIZE+tx],perBlockCount[(1-zoo)*BLOCKSIZE+tx]);
   __syncthreads();
@@ -97,7 +98,7 @@ __global__ void global_radixsort(unsigned int *d_keys,
   {
     if(tx < i)
     {
-      for(int j=0;i<BINNUM;++j)
+      for(int j=0;j<BINNUM;++j)
       {
         perBlockCount[j][tx] = perBlockCount[j][tx]+ perBlockCount[j][i+tx];
       }
@@ -107,10 +108,13 @@ __global__ void global_radixsort(unsigned int *d_keys,
 
   if(tx == 0)
   {
-    for(int i=0;i<BINNUM;++i)
+ //     printf("Block %d, ",blockIdx.x);
+    for(int j=0;j<BINNUM;++j)
     {
-      blockCount[blockIdx.x+i*numBlocks] = perBlockCount[i][0];
+      blockCount[blockIdx.x+j*numBlocks] = perBlockCount[j][0];
+   //   printf("bin%d--%d,",j,blockCount[blockIdx.x+j*numBlocks]);
     }
+   // printf("\n");
     //printf("Block %d, bin0--%d, bin1--%d\n",blockIdx.x,
     //  blockCount[blockIdx.x],blockCount[blockIdx.x+numBlocks]);
   }
@@ -156,8 +160,13 @@ __global__ void prefixSumBottomUp(int *s_data, int *g_data)
   for(int i=2, size=data_size/2; i <= data_size; i <<= 1, size>>=1)
   {
     if( tx < size)
-      tile[(i*tx+i-1)] += tile[i*tx+i>>1-1];
-    __syncthreads();
+    {   tile[(i*tx+i-1)] += tile[i*tx+i>>1-1];
+ //     printf("tile[%d]+=tile[%d]\n", i*tx+i-1,i*tx+(i/2)-1);
+      __syncthreads();
+    
+ //   for(int j=0;j<BINNUM;++j)
+ //     printf("bin%d: %d\n",j,tile[j]);
+    }
   }
   tile[data_size-1] = 0;
 
@@ -174,6 +183,8 @@ __global__ void prefixSumTopDown(int *s_data, int *g_data)
 
   extern  __shared__ int tile[]; 
   tile[tx] = s_data[idx];
+  printf("pre--tx:%d, %d\n",tx,tile[tx]);
+  __syncthreads();
 
   int data_size = blockDim.x;
   
@@ -182,45 +193,88 @@ __global__ void prefixSumTopDown(int *s_data, int *g_data)
   {
     if(tx<size)
     {
-      int tmp = tile[i*tx+i-1];
-      //printf("i>>1:%d, i*tx:%d, i*tx+i>>1-1:%d\n", i>>1, i*tx, 0+1-1);
-      tile[i*tx+i-1] += tile[i*tx+(i>>1)-1];
-      tile[i*tx+(i>>1)-1] = tmp;
+      int tmp = tile[i*tx+i>>1-1]; //ai
+      tile[i*tx+i>>1-1] = tile[i*tx+i-1];
+      //printf("i>>1:%d, i*tx:%d\n", i>>1, i*tx);
+      tile[i*tx+i-1] += tmp;
+    //  printf("tile[%d]+=tile[%d], tile[%d]:%d, tile[%d]:%d\n",
+    //      i*tx+i-1,i*tx+i/2-1,i*tx+i-1,tile[i*tx+i-1],
+    //      i*tx+i/2-1,tile[i*tx+i/2-1]);
+    //  printf("after assign tile[%d]=%d\n",i*tx+i/2-1,tmp);
      // printf("tile[%d]:%d,tile[%d]:%d\n", i*tx+i-1, tile[i*tx+i-1], i*tx+i>>1-1,
      //     tile[i*tx+i>>1-1]);
     }
      __syncthreads();
   }
 
+     __syncthreads();
   g_data[tx] = tile[tx];
-  //printf("tx:%d, %d\n", tx, g_data[tx]);
+  printf("tx:%d, %d\n", tx, g_data[tx]);
 }
 
+__global__ void prescan(int *s_data, int *g_data)
+{
+  extern __shared__ int temp[];
+  int tx = threadIdx.x;
+  int offset = 1;
+
+  temp[2*tx] = s_data[2*tx];
+  temp[2*tx+1] = s_data[2*tx+1];
+
+  for(int d = BINNUM>>1; d > 0;d>>=1)
+  {
+    __syncthreads();
+    if(tx<d)
+    {
+      int ai = offset*(2*tx+1)-1;
+      int bi = offset*(2*tx+2)-1;
+
+      temp[bi] += temp[ai];
+    }
+    offset*=2;
+  }
+
+  if(tx==0)
+    temp[BINNUM-1] = 0;
+
+  for(int d=1;d<BINNUM;d*=2)
+  {
+    offset >>= 1;
+    __syncthreads();
+    if(tx<d)
+    {
+      int ai = offset*(2*tx+1)-1;
+      int bi = offset*(2*tx+2)-1;
+
+      int t = temp[ai];
+      temp[ai] = temp[bi];
+      temp[bi] += t;
+    }
+  }
+  __syncthreads();
+  
+  g_data[2*tx] = temp[2*tx];
+  g_data[2*tx+1] = temp[2*tx+1];
+  
+}
 __global__ void scatter(unsigned int *s_data, unsigned int *g_data, int *prefixSum,
     int pos)
 {
   int tx = threadIdx.x;
-  //int idx = blockIdx.x*blockDim.x + tx;
 
   int idx = prefixSum[tx];
-  //extern  __shared__ int count[]; // size = BINNUM
-
-  //if(tx < binsize)
-  //{
-  //  count[tx] = prefixSum[tx];
-  //  //printf("tx:%d,%d\n", tx, count[tx]);
-  //}
-
   //__syncthreads();
-
   for (int i=0;i<numElements;++i)
   {
 
     unsigned int key = s_data[i];
-    int binIndex = getBinIndex(key, pos);
-    if(tx == binIndex)
+    //printf("tx:%d, key:%d\n", tx,key);
+    int binIdx = getBinIndex(key, pos);
+    if(tx == binIdx)
     {
-      g_data[idx] = s_data[i];
+ // printf("bin:%d,key:%d\n", binIdx, key);
+      g_data[idx] = key;
+      //printf("bin%d,idx:%d\n",tx,idx);
       idx++;
     }
   }
@@ -231,7 +285,6 @@ __global__ void scatter(unsigned int *s_data, unsigned int *g_data, int *prefixS
 __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
 {
   unsigned int *d_keys;
-  //unsigned int *d_keysSorted;
   unsigned int numbytes = numElements*sizeof(unsigned int);
 
   checkCudaErrors(cudaMalloc((void **) &d_keys, numbytes));
@@ -239,7 +292,7 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
  // checkCudaErrors(cudaMalloc((void**)&d_keysSorted, numbytes));
  // checkCudaErrors(cudaMemset(d_keysSorted, 0, numbytes));
 
-  //int perBlockCount[2*BLOCKSIZE];
+
   int numBlocks = numElements / BLOCKSIZE;
  
   cudaEvent_t my_start_event, my_stop_event;
@@ -251,8 +304,9 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
   checkCudaErrors(cudaMalloc((void**)&blockCount, BINNUM*numBlocks*sizeof(int)));
   int *overallCount;
   checkCudaErrors(cudaMalloc((void**)&overallCount, BINNUM*sizeof(int)));
-  int *bottomUpResult;
+/*  int *bottomUpResult;
   checkCudaErrors(cudaMalloc((void**)&bottomUpResult, BINNUM*sizeof(int)));
+ */ 
   int *prefixSumArray;
   checkCudaErrors(cudaMalloc((void**)&prefixSumArray, BINNUM*sizeof(int)));
 
@@ -263,19 +317,14 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
   {
     global_radixsort<<<numBlocks, BLOCKSIZE>>>(d_keys, i, blockCount, numBlocks);
     // combine per block counting
-    //printf("jc\n");
     combineBlockCount<<<BINNUM, numBlocks, numBlocks*sizeof(int)>>>(blockCount, overallCount);
     // prefix sum
+    prescan<<<1,BINNUM/2, BINNUM*sizeof(int)>>>(overallCount, prefixSumArray);
     
-    prefixSumBottomUp<<<1, BINNUM, BINNUM*sizeof(int)>>>(overallCount,
-        bottomUpResult);
-
-    prefixSumTopDown<<<1, BINNUM, BINNUM*sizeof(int)>>>(bottomUpResult,
-        prefixSumArray);
     //scatter to d_keys
-    scatter<<<1, BINNUM>>>(d_keys, keys_tmp, prefixSumArray,
-        i);
-    checkCudaErrors(cudaMemcpy(d_keys, keys_tmp, numElements*sizeof(int),
+    scatter<<<1, BINNUM>>>(d_keys, keys_tmp, prefixSumArray,i);
+
+   checkCudaErrors(cudaMemcpy(d_keys, keys_tmp, numElements*sizeof(int),
           cudaMemcpyDeviceToDevice));
 
   }
@@ -288,16 +337,21 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
   printf("radixSort (MyTest), Throughput = %.4f KElements/s, Time = %.5f s, Size = %u elements\n",
            1.0e-3f * numElements / my_time, my_time, numElements);
 
-#define testreorder
+//#define testreorder
 
 #ifdef testblockcount
   int *hostBlockCount;
-  hostBlockCount = (int*)malloc(2*numBlocks*sizeof(int));
+  hostBlockCount = (int*)malloc(BINNUM*numBlocks*sizeof(int));
   checkCudaErrors(cudaMemcpy(hostBlockCount, blockCount,
-        2*numBlocks*sizeof(int), cudaMemcpyDeviceToHost));
+        BINNUM*numBlocks*sizeof(int), cudaMemcpyDeviceToHost));
   for(int i = 0;i<numBlocks;++i)
-    printf("block %d: bin0:%d, bin1:%d\n",i, hostBlockCount[i],
-      hostBlockCount[i+numBlocks]);
+  {
+    printf("block %d: ",i);
+    for(int j=0;j<BINNUM;++j)
+      printf("bin%d---%d ", j, hostBlockCount[i+j*numBlocks]);
+ //     printf("bin0--%d, bin1--%d ", hostBlockCount[i], hostBlockCount[i+numBlocks]);
+    printf("\n");
+  }
 #endif
   
 #ifdef testoverallcount
@@ -333,7 +387,7 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
 
 
   checkCudaErrors(cudaDeviceSynchronize());
-  //checkCudaErrors(cudaMemcpy(h_sorted, d_keys, numbytes, cudaMemcpyDeviceToHost));
+  checkCudaErrors(cudaMemcpy(h_sorted, d_keys, numbytes, cudaMemcpyDeviceToHost));
 
   checkCudaErrors(cudaFree(d_keys));
   //checkCudaErrors(cudaFree(d_keysSorted));
@@ -353,7 +407,11 @@ main(int argc, char **argv)
   sorted = (int *) malloc (numElements*sizeof(int));
   for (int i=0; i<numElements; i++) {
     unsorted[i] = (int) (rand() % RADIX);
-    //unsorted[i] = 1;
+ //   printf("unsorted %d:%d\n",i,unsorted[i]);
+    //   if(i<numElements/2)
+  //  unsorted[i] = 1;
+  //  else
+  //  unsorted[i] = 0;
   }
 
   //initialize list for Thrust
@@ -441,17 +499,16 @@ main(int argc, char **argv)
 
   unsigned int *my_sorted;
   my_sorted = (unsigned int *) malloc (numElements*sizeof(unsigned int));
-  host_radixsort((unsigned int*)unsorted,my_sorted);
-
- // bool myIsCorrect = true;
- // for (int i = 0; i < (int)numElements; i++) {
- //   if (my_sorted[i] != sorted[i]) {
- //   //  printf("%d------%d\n", i, my_sorted[i]);
- //     myIsCorrect = false;
- //     break;
- //   }
- // }
- // if (myIsCorrect ) printf("MyVersion: VALID!\n");
+  host_radixsort((unsigned int*)unsorted, my_sorted);
+  //bool MyTestResult = true;
+  //for (int i = 0; i < (int)numElements; i++) {
+  //  if (my_sorted[i] != sorted[i]) {
+  //    printf("mysorted:%d, sorted:%d\n",my_sorted[i], sorted[i]);
+  //    MyTestResult = false;
+  //    break;
+  //  }
+  //}
+  //if (MyTestResult) printf("MyVersion: VALID!\n");
 
 }
 
