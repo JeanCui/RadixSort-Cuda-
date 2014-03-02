@@ -15,10 +15,10 @@
 //#define RADIX 4294967296
 #define RADIX 2147483658
 //#define numElements 1048576
-#define numElements 2048
+#define numElements 524288
 #define numIterations 10
 
-#define BLOCKSIZE 32
+#define BLOCKSIZE 512
 
 void 
 sequentialSort(int *unsorted, int *sorted)
@@ -322,7 +322,7 @@ __host__ void host_radixsort(unsigned int *h_keys, unsigned int *h_sorted)
   printf("radixSort (MyTest), Throughput = %.4f KElements/s, Time = %.5f s, Size = %u elements\n",
            1.0e-3f * numElements / my_time, my_time, numElements);
 
-#define testreorder
+//#define testreorder
 
 #ifdef testblockcount
   int *hostBlockCount;
@@ -391,16 +391,16 @@ main(int argc, char **argv)
   }
 
   //initialize list for Thrust
-  thrust::host_vector<int> h_keys(numElements);
-  thrust::host_vector<int> h_keysSorted(numElements);
-  for (int i = 0; i < (int)numElements; i++)
-     h_keys[i] = unsorted[i];
+  //thrust::host_vector<int> h_keys(numElements);
+  //thrust::host_vector<int> h_keysSorted(numElements);
+  //for (int i = 0; i < (int)numElements; i++)
+  //   h_keys[i] = unsorted[i];
 
-  // SEQUENTIAL RUN
-  cudaEvent_t seq_start_event, seq_stop_event;
-  checkCudaErrors(cudaEventCreate(&seq_start_event));
-  checkCudaErrors(cudaEventCreate(&seq_stop_event));
-  checkCudaErrors(cudaEventRecord(seq_start_event, 0));
+  //// SEQUENTIAL RUN
+  //cudaEvent_t seq_start_event, seq_stop_event;
+  //checkCudaErrors(cudaEventCreate(&seq_start_event));
+  //checkCudaErrors(cudaEventCreate(&seq_stop_event));
+  //checkCudaErrors(cudaEventRecord(seq_start_event, 0));
 
   // TODO: THIS TAKES A FEW MINUTES AND SHOULD BE COMMENTED OUT FOR TESTING
   //(voir) sequentialSort(unsorted,sorted);
@@ -476,6 +476,7 @@ main(int argc, char **argv)
   //unsigned int *my_sorted;
   //my_sorted = (unsigned int *) malloc (numElements*sizeof(unsigned int));
   host_radixsort((unsigned int*)unsorted,(unsigned int*)sorted);
-
+  for(int i=0;i<numElements;++i)
+    printf("%d\n", sorted[i]);
 }
 

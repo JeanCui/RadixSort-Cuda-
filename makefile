@@ -27,7 +27,7 @@ INCLUDES      := -I$(CUDA_INC_PATH) -I. -I$(CUDA_SDK_PATH)
 # Target rules
 all: radixSort
 
-radixSort.o: radixSortBack.cu
+radixSort.o: radixSort.cu
 	$(NVCC) $(NVCCFLAGS) $(GENCODE_FLAGS) $(INCLUDES) -o $@ -c $<
 
 radixSort: radixSort.o
